@@ -1,0 +1,172 @@
+var data = decodeToJson(payload);
+var deviceName = data.deviceInfo.deviceName;
+var deviceType = data.deviceInfo.deviceProfileName;
+var groupName = 'IAQ devices';
+// var customerName = 'Customer A';
+// use assetName and assetType instead of deviceName and deviceType
+// to automatically create assets instead of devices.
+// var assetName = 'Asset A';
+// var assetType = 'building';
+
+// If you want to parse incoming data somehow, you can add your code to this function.
+// input: bytes
+// expected output:
+//  {
+//    "attributes": {"attributeKey": "attributeValue"},
+//    "telemetry": {"telemetryKey": "telemetryValue"}
+//  }
+//
+// In the example - bytes will be saved as HEX string and also parsed as light level, battery level and PIR sensor value.
+//
+
+function decodePayload(input) {
+    var output = { attributes:{}, telemetry: {} };
+    // --- Decoding code --- //
+
+    output.telemetry.HEX_bytes = bytesToHex(input);
+
+    // If the length of the input byte array is odd - we cannot parse it using the example below
+    var i = 0;
+    while (i < input.length - 2) {
+        var channel_id = input[i] & 0xff;
+        i++;
+        var channel_type = input[i] & 0xff;
+        i++;
+        // VOLTAGE
+        if (channel_id === 0x03 && channel_type === 0x74) {
+            output.telemetry.voltage = parseBytesToInt(input, i, 2, false) / 10;
+            i += 2;
+        }
+        // ACTIVE POWER
+        else if (channel_id === 0x04 && channel_type === 0x80) {
+            output.telemetry.active_power = parseBytesToInt(input, i, 4, false) ;
+            i += 4;
+        }
+        // POWER FACTOR
+        else if (channel_id == 0x05 && channel_type == 0x81) {
+            var rawFactor = input[i] & 0xff; 
+            output.telemetry.power_factor = rawFactor / 100; 
+            i += 1; 
+        }
+        // POWER CONSUMPTION
+        else if (channel_id === 0x06 && channel_type == 0x83) {
+            output.telemetry.power_consumption = parseBytesToInt(input, i, 4, false) ;
+            i += 4;
+        }
+        // CURRENT
+        else if (channel_id === 0x07 && channel_type == 0xC9) {
+            output.telemetry.current = parseBytesToInt(input, i, 2, false) ;
+            i += 2;
+        }
+        // STATE
+        else if (channel_id === 0x08 && channel_type == 0x70) {
+            output.telemetry.socket_status = input[i] === 1 ? "open" : "close";
+            i += 1; 
+        }
+        // SWITCH
+        else if (channel_id == 0x08 && channel_type == 0x31) {
+        // CHANGE
+           var swtitchChange = parseByteToBinaryArray( input[i++], 8, false);
+            // output all switch Change
+            for (var idx = 0; idx < 8; idx++) {
+                var switchTag = "switchChange_" + (idx + 1);
+                output[switchTag] = swtitchChange === 1 ? "on" : "off";
+            }
+        // STATUS
+          var swtitchStatus = parseByteToBinaryArray( input[i++], 8, false);
+            // output all switch Status
+            for (var idx = 0; idx < 8; idx++) {
+                var switchTag = "switchStaTUS_" + (idx + 1);
+                output[switchTag] = swtitchStatus === 1 ? "on" : "off";
+            }
+        } 
+    }
+
+
+    // --- Decoding code --- //
+    return output;
+}
+
+// --- attributes and telemetry objects ---
+var telemetry = {};
+var attributes = {};
+// --- attributes and telemetry objects ---
+
+// --- Timestamp parsing
+var dateString = data.time;
+var timestamp = -1;
+if (dateString != null) {
+    timestamp = new Date(dateString).getTime();
+    if (timestamp == -1) {
+        var secondsSeparatorIndex = dateString.lastIndexOf('.') + 1;
+        var millisecondsEndIndex = dateString.lastIndexOf('+');
+        if (millisecondsEndIndex == -1) {
+            millisecondsEndIndex = dateString.lastIndexOf('Z');
+        }
+        if (millisecondsEndIndex == -1) {
+            millisecondsEndIndex = dateString.lastIndexOf('-');
+        }
+        if (millisecondsEndIndex == -1) {
+            if (dateString.length >= secondsSeparatorIndex + 3) {
+                dateString = dateString.substring(0, secondsSeparatorIndex + 3);
+            }
+        } else {
+            dateString = dateString.substring(0, secondsSeparatorIndex + 3) +
+                dateString.substring(millisecondsEndIndex, dateString.length);
+        }
+        timestamp = new Date(dateString).getTime();
+    }
+}
+// If we cannot parse timestamp - we will use the current timestamp
+if (timestamp == -1) {
+    timestamp = Date.now();
+}
+// --- Timestamp parsing
+
+// You can add some keys manually to attributes or telemetry
+attributes.deduplicationId = data.deduplicationId;
+
+// You can exclude some keys from the result
+var excludeFromAttributesList = ["deviceName", "rxInfo", "confirmed", "data", "deduplicationId","time", "adr", "dr", "fCnt"];
+var excludeFromTelemetryList = ["data", "deviceInfo", "txInfo", "devAddr", "adr", "time", "fPort", "region_common_name", "region_config_id", "deduplicationId"];
+
+// Message parsing
+// To avoid paths in the decoded objects we passing false value to function as "pathInKey" argument.
+// Warning: pathInKey can cause already found fields to be overwritten with the last value found.
+
+var telemetryData = toFlatMap(data, excludeFromTelemetryList, false);
+var attributesData = toFlatMap(data, excludeFromAttributesList, false);
+
+var uplinkDataList = [];
+
+// Passing incoming bytes to decodePayload function, to get custom decoding
+var customDecoding = decodePayload(base64ToBytes(data.data));
+
+// Collecting data to result
+if (customDecoding.?telemetry.size() > 0) {
+    telemetry.putAll(customDecoding.telemetry);
+}
+
+if (customDecoding.?attributes.size() > 0) {
+    attributes.putAll(customDecoding.attributes);
+}
+
+telemetry.putAll(telemetryData);
+attributes.putAll(attributesData);
+
+var result = {
+    deviceName: deviceName,
+    deviceType: deviceType,
+//  assetName: assetName,
+//  assetType: assetType,
+//  customerName: customerName,
+    groupName: groupName,
+    attributes: attributes,
+    telemetry: {
+        ts: timestamp,
+        values: telemetry
+    }
+};
+
+return result;
+

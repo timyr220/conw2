@@ -1,0 +1,39 @@
+{
+  "name": "converter",
+  "type": "UPLINK",
+  "debugMode": true,
+  "configuration": {
+    "scriptLang": "TBEL",
+    "decoder": null,
+    "tbelDecoder": "var data = decodeToJson(payload);\nvar deviceName = data.deviceInfo.deviceName;\nvar deviceType = data.deviceInfo.deviceProfileName;\nvar groupName = 'IAQ devices';\n// var customerName = 'Customer A';\n// use assetName and assetType instead of deviceName and deviceType\n// to automatically create assets instead of devices.\n// var assetName = 'Asset A';\n// var assetType = 'building';\n\n// If you want to parse incoming data somehow, you can add your code to this function.\n// input: bytes\n// expected output:\n//  {\n//    \"attributes\": {\"attributeKey\": \"attributeValue\"},\n//    \"telemetry\": {\"telemetryKey\": \"telemetryValue\"}\n//  }\n//\n// In the example - bytes will be saved as HEX string and also parsed as light level, battery level and PIR sensor value.\n//\n\nfunction decodePayload(input) {\n    var output = { attributes:{}, telemetry: {} };\n    // --- Decoding code --- //\n\n    output.telemetry.HEX_bytes = bytesToHex(input);\n\n    // If the length of the input byte array is odd - we cannot parse it using the example below\n    if (input.length > 2) {\n        var i = 0;\n        while (i < input.length - 2) {\n            var channel_id = input[i];\n            i++;\n            var channel_type = input[i];\n            i++;\n            // SWITCH STATE\n            if (channel_id === -1 && channel_type === 0x29) {\n                // payload (0 0 0 0 0 0 0 0)\n                //  Switch    3 2 1   3 2 1\n                //          ------- -------\n                // bit mask  change   state\n                output.telemetry.switch_1 = (input[i] & 1) == 1 ? \"on\" : \"off\";\n                output.telemetry.switch_1_change = ((input[i] >> 4) & 1) == 1 ? \"yes\" : \"no\";\n    \n                output.telemetry.switch_2 = ((input[i] >> 1) & 1) == 1 ? \"on\" : \"off\";\n                output.telemetry.switch_2_change = ((input[i] >> 5) & 1) == 1 ? \"yes\" : \"no\";\n    \n                output.telemetry.switch_3 = ((input[i] >> 2) & 1) == 1 ? \"on\" : \"off\";\n                output.telemetry.switch_3_change = ((input[i] >> 6) & 1) == 1 ? \"yes\" : \"no\";\n                i += 1;\n            }\n            // VOLTAGE\n            else if (channel_id === 0x03 && channel_type === 0x74) {\n                output.telemetry.voltage = parseBytesToInt(input, i, 2, false) / 10;\n                i += 2;\n            }\n            // ACTIVE POWER\n            else if (channel_id === 0x04 && channel_type === -128) {\n                output.telemetry.power = parseBytesToInt(input, i, 4, false) ;\n                i += 4;\n            }\n            // POWER FACTOR\n            else if (channel_id == 5 && channel_type == -127) {\n                output.telemetry.factor = input[i];\n                i += 1;\n            }\n            // POWER CONSUMPTION\n            else if (channel_id === 0x06 && channel_type == -125) {\n                output.telemetry.power_sum = parseBytesToInt(input, i, 4, false) ;\n                i += 4;\n            }\n            // CURRENT\n            else if (channel_id === 0x07 && channel_type == -55) {\n                output.telemetry.current = parseBytesToInt(input, i, 2, false) ;\n                i += 2;\n            }\n        }\n    }\n\n    // --- Decoding code --- //\n    return output;\n}\n\n// --- attributes and telemetry objects ---\nvar telemetry = {};\nvar attributes = {};\n// --- attributes and telemetry objects ---\n\n// --- Timestamp parsing\nvar dateString = data.time;\nvar timestamp = -1;\nif (dateString != null) {\n  timestamp = new Date(dateString).getTime();\n  if (timestamp == -1) {\n      var secondsSeparatorIndex = dateString.lastIndexOf('.') + 1;\n      var millisecondsEndIndex = dateString.lastIndexOf('+');\n      if (millisecondsEndIndex == -1) {\n          millisecondsEndIndex = dateString.lastIndexOf('Z');\n      }\n      if (millisecondsEndIndex == -1) {\n          millisecondsEndIndex = dateString.lastIndexOf('-');\n      }\n      if (millisecondsEndIndex == -1) {\n          if (dateString.length >= secondsSeparatorIndex + 3) {\n              dateString = dateString.substring(0, secondsSeparatorIndex + 3);\n          }\n      } else {\n          dateString = dateString.substring(0, secondsSeparatorIndex + 3) +\n              dateString.substring(millisecondsEndIndex, dateString.length);\n      }\n      timestamp = new Date(dateString).getTime();\n  }\n}\n// If we cannot parse timestamp - we will use the current timestamp\nif (timestamp == -1) {\n    timestamp = Date.now();\n}\n// --- Timestamp parsing\n\n// You can add some keys manually to attributes or telemetry\nattributes.deduplicationId = data.deduplicationId;\n\n// You can exclude some keys from the result\nvar excludeFromAttributesList = [\"deviceName\", \"rxInfo\", \"confirmed\", \"data\", \"deduplicationId\",\"time\", \"adr\", \"dr\", \"fCnt\"];\nvar excludeFromTelemetryList = [\"data\", \"deviceInfo\", \"txInfo\", \"devAddr\", \"adr\", \"time\", \"fPort\", \"region_common_name\", \"region_config_id\", \"deduplicationId\"];\n\n// Message parsing\n// To avoid paths in the decoded objects we passing false value to function as \"pathInKey\" argument.\n// Warning: pathInKey can cause already found fields to be overwritten with the last value found.\n\nvar telemetryData = toFlatMap(data, excludeFromTelemetryList, false);\nvar attributesData = toFlatMap(data, excludeFromAttributesList, false);\n\nvar uplinkDataList = [];\n\n// Passing incoming bytes to decodePayload function, to get custom decoding\nvar customDecoding = decodePayload(base64ToBytes(data.data));\n\n// Collecting data to result\nif (customDecoding.?telemetry.size() > 0) {\n    telemetry.putAll(customDecoding.telemetry);\n}\n\nif (customDecoding.?attributes.size() > 0) {\n    attributes.putAll(customDecoding.attributes);\n}\n\ntelemetry.putAll(telemetryData);\nattributes.putAll(attributesData);\n\nvar result = {\n    deviceName: deviceName,\n    deviceType: deviceType,\n//  assetName: assetName,\n//  assetType: assetType,\n//  customerName: customerName,\n    groupName: groupName,\n    attributes: attributes,\n    telemetry: {\n        ts: timestamp,\n        values: telemetry\n    }\n};\n\nreturn result;",
+    "encoder": null,
+    "tbelEncoder": null,
+    "updateOnlyKeys": [
+      "tenantId",
+      "tenantName",
+      "applicationId",
+      "applicationName",
+      "deviceProfileId",
+      "deviceProfileName",
+      "devEui",
+      "devAddr",
+      "fPort",
+      "frequency",
+      "bandwidth",
+      "spreadingFactor",
+      "codeRate",
+      "battery",
+      "pir",
+      "daylight",
+      "confirmed",
+      "gatewayId",
+      "channel",
+      "rfChain",
+      "crcStatus"
+    ]
+  },
+  "additionalInfo": {
+    "description": ""
+  },
+  "edgeTemplate": false
+}
